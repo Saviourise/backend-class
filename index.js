@@ -3,6 +3,10 @@ const bodyParser = require("body-parser");
 const mongoose = require("mongoose");
 const userRoutes = require("./routes/userRoutes");
 const adminRoute = require("./routes/adminRoute");
+const dotenv = require("dotenv");
+
+//load env variables
+dotenv.config();
 
 const app = express();
 
