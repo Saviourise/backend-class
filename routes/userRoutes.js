@@ -1,10 +1,55 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const route = express.Router();
 const User = require("../models/Usermodel");
 const bcrypt = require("bcryptjs");
 const nodemailer = require("nodemailer");
+const multer = require("multer");
+const { GridFsStorage } = require("multer-gridfs-storage");
+const Grid = require("gridfs-stream");
 
 require("dotenv").config();
+
+let gfs, gridfsBucket;
+
+const conn = mongoose.connection;
+
+conn.once("open", () => {
+  gridfsBucket = new mongoose.mongo.GridFSBucket(conn.db, {
+    bucketName: "files",
+  });
+  gfs = Grid(conn.db, mongoose.mongo);
+  gfs.collection("files");
+});
+
+const storage = new GridFsStorage({
+  url: "mongodb+srv://test:test@cluster0.noo9j.mongodb.net/?retryWrites=true&w=majority",
+  options: {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  },
+  file: (req, file) => {
+    const match = [
+      "image/png",
+      "image/jpeg",
+      "image/jpg",
+      "image/webp",
+      "video/mp4",
+    ];
+
+    if (match.indexOf(file.mimetype) === -1) {
+      const filename = `${Date.now()}-image-${file.originalname}`;
+      return filename;
+    }
+
+    return {
+      bucketName: "files",
+      filename: `${Date.now()}-image-${file.originalname}`,
+    };
+  },
+});
+
+const upload = multer({ storage });
 
 let transporter = nodemailer.createTransport({
   name: "www.a2z.com.ng",
@@ -24,9 +69,21 @@ route.get("/", (req, res) => {
   res.send("Welcome to users routes!");
 });
 
-route.post("/register", async (req, res) => {
+route.get("/file/:filename", async (req, res) => {
+  try {
+    const file = await gfs.files.findOne({ filename: req.params.filename });
+    const readStream = gridfsBucket.openDownloadStream(file._id);
+    readStream.pipe(res);
+  } catch (error) {
+    console.log(error);
+    res.send(error);
+  }
+});
+
+route.post("/register", upload.array("files"), async (req, res) => {
   //get user input
   const { email, name, password } = req.body;
+  const profileImg = `user/files/${req.files[0].filename}`;
 
   //validate user input
   if (!email || !name || !password) {
@@ -55,20 +112,50 @@ route.post("/register", async (req, res) => {
         name: name,
         password: hashedPassword,
         verifyCode: code,
+        profilePic: profileImg,
       });
 
       //save user to database
       let savedUser = await user.save();
 
-      let sendMail = await transporter.sendMail({
+      await transporter.sendMail({
         from: '"My Server" <test@a2z.com.ng>', // sender address
         to: email, // list of receivers
         subject: "Verify Account", // Subject line
         text: `Your verification code is ${code}`, // plain text body
-        html: `<div style="text-align:center;">Your verification code is ${code}</div>`, // html body
-      });
+        html: `<head>
+  <style>
+    @import url("https://fonts.googleapis.com/css2?family=Nunito&family=Poppins&display=swap");
 
-      console.log("Message sent: %s", sendMail.messageId);
+    * {
+      font-family: "Poppins", sans-serif;
+    }
+  </style>
+</head>
+<body>
+  <div style="text-align: center; background: whitesmoke; font-size: 20px">
+    <p style="text-align: center">
+      <img
+        src="https://cdn.pixabay.com/photo/2016/12/26/18/33/logo-1932539__340.png"
+        alt="logo"
+        width="100"
+        height="100"
+      />
+    </p>
+    <p>Your verification code is ${code}</p>
+    <p>
+      Or click
+      <a
+        href="http://localhost:5000/user/verify/${email}/${code}"
+        target="_blank"
+        >here</a
+      >
+      to verify your email.
+    </p>
+  </div>
+</body>
+`, // html body
+      });
 
       //return saved user
       res
@@ -116,9 +203,9 @@ route.get("/all", async (req, res) => {
 });
 
 // create verify route
-route.post("/verify", async (req, res) => {
+route.get("/verify/:email/:code", async (req, res) => {
   // get user input
-  const { email, code } = req.body;
+  const { email, code } = req.params;
 
   // validate user input
   if (!email || !code) {
@@ -142,15 +229,13 @@ route.post("/verify", async (req, res) => {
         );
 
         // send email to user
-        let sendMail = await transporter.sendMail({
+        await transporter.sendMail({
           from: '"My Server" <test@a2z.com.ng>', // sender address
           to: email, // list of receivers
           subject: "Account verified", // Subject line
           text: `Account Verified`, // plain text body
           html: `<div style="text-align:center;">Your account has been verified successfully</div>`, // html body
         });
-
-        console.log("Message sent: %s", sendMail.messageId);
       }
     }
   }
@@ -159,6 +244,11 @@ route.post("/verify", async (req, res) => {
   res.json({
     message: "User verified successfully",
   });
+});
+
+route.delete("/delete", async (req, res) => {
+  const delUsers = await User.deleteMany();
+  res.json({ message: "All users deleted", delUsers });
 });
 
 module.exports = route;
